@@ -5,8 +5,7 @@ node:
   # 主节点URL
   master_url: http://localhost:1030
   master_heartbeat_url: /dev-api/aihuman/cluster/heartbeat/
-  master_task_url: /dev-api/aihuman/task/
-  musetalk_dir: /opt/musetalk
+  master_task_url: /dev-api/aihuman/task/anonymous/
 
 # 调度配置
 scheduler:
@@ -27,3 +26,11 @@ logger:
   rotation: "1 day"
   # 保留时间
   retention: "7 days"
+
+# musetalk配置
+musetalk:
+  # musetalk的根目录
+  base_dir: /opt/musetalk
+  bin: /Users/qiukai/Documents/Project/PycharmProject/ClusterAgent/agent/test.py
+  # 填写python3的路径
+  python_bin: /usr/bin/python3

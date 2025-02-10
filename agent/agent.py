@@ -3,7 +3,7 @@ from datetime import datetime
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
-import os
+from constants import Constants
 import yaml
 from pathlib import Path
 
@@ -15,22 +15,22 @@ class ClusterAgent:
 
         # 加载配置文件
         with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+            self.config = yaml.safe_load(f)
 
         # 验证配置
-        if not config or 'node' not in config or 'scheduler' not in config:
+        if not self.config or 'node' not in self.config or 'scheduler' not in self.config:
             raise ValueError('配置文件格式错误：缺少必要的配置项')
 
         # 设置节点配置
-        node_config = config['node']
+        node_config = self.config['node']
         self.node_id = node_config.get('id', 'default-node')
         self.master_url = node_config.get('master_url', 'http://localhost:1030')
         self.master_heartbeat_url = self.master_url + node_config.get('master_heartbeat_url',
                                                                       '/dev-api/aihuman/cluster/heartbeat/')
-        self.master_task_url = self.master_url + node_config.get('master_task_url', '/dev-api/aihuman/cluster/task/')
+        self.master_task_url = self.master_url + node_config.get('master_task_url', '/dev-api/aihuman/task/anonymous/')
 
         # 设置调度配置
-        scheduler_config = config['scheduler']
+        scheduler_config = self.config['scheduler']
         self.heartbeat_interval = int(scheduler_config.get('heartbeat_interval', 30))
         self.task_fetch_interval = int(scheduler_config.get('task_fetch_interval', 30))
 
@@ -78,6 +78,10 @@ class ClusterAgent:
                 self.node_id)  # http://localhost:1030/dev-api/aihuman/cluster/heartbeat/
             async with self.session.post(url) as response:
                 if response.status == 200:
+                    resp_json = await response.json()
+                    if resp_json.get('code') != 200:
+                        logger.error(f"Failed to fetch tasks: response code {resp_json.get('code')}, message: {resp_json.get('msg')}")
+                        return
                     logger.debug("Heartbeat to %s sent successfully" % url)
                 else:
                     logger.error("Failed to send heartbeat to %s , status: %s" % (url, response.status))
@@ -93,13 +97,17 @@ class ClusterAgent:
                     # 检查响应头中是否包含文件下载相关信息
                     # 这是一个文件下载任务
                     task = {
-                            'id': response.headers.get('Task-Id'),
+                            'task_id': response.headers.get('Task-Id'),
                             'name': response.headers.get('Task-Name'),
                             'type': 'file_download',
                             'file_name': response.headers.get('Material-Name'),
-                            'content': await response.read()
+                            'content': await response.read(),
+                            'cluster_id': self.node_id,
+                            'err_msg': None,
                         }
-                    await self.download_file(task)
+                    if await self.download_file(task):
+                        await self.execute_python_script(task)
+                        await self.upload_result(task)
                 elif response.status == 204:
                     logger.info(f"No tasks available")
                 else:
@@ -114,8 +122,9 @@ class ClusterAgent:
             content = task.get('content')
             
             if not file_name or content is None:
+                task['err_msg'] = 'Invalid file download task: missing file_name or content'
                 logger.error(f"Invalid file download task: missing file_name or content")
-                return
+                return False
 
             material_dir = Path(__file__).parent.parent / 'material'
             material_dir.mkdir(exist_ok=True)
@@ -124,34 +133,79 @@ class ClusterAgent:
             with open(file_path, 'wb') as f:
                 f.write(content)
             logger.info(f"File {file_name} downloaded successfully")
+            return True
         except Exception as e:
+            task['err_msg'] = 'download material file failed'
             logger.error(f"Error downloading file: {e}")
+            return False
 
-    async def execute_task(self, task):
+    async def execute_python_script(self, task):
+        """执行配置文件中musetalk脚本"""
+        try:
+            musetalk_bin = self.config.get('musetalk', {}).get('bin')
+            if musetalk_bin:
+                # Todo：python3的路径要替换成 python_bin = self.config.get('musetalk', {}).get('python_bin')
+                process = await asyncio.create_subprocess_exec(
+                    'python3', musetalk_bin,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                logger.info(f"Output: {stdout.decode()}")
+                if process.returncode == 0:
+                    task['status'] = Constants.TASK_COMPLETED
+                    logger.info(f"Successfully executed {musetalk_bin}")
+                else:
+                    task['status'] = Constants.TASK_FAILED
+                    task['err_msg'] = stderr.decode()
+                    logger.error(f"Failed to execute {musetalk_bin}: {stderr.decode()}")
+            else:
+                task['status'] = Constants.TASK_FAILED
+                task['err_msg'] = "musetalk.bin not configured in config.yaml"
+                logger.warning("musetalk.bin not configured in config.yaml")
+        except Exception as e:
+            task['err_msg'] = str(e)
+            task['status'] = Constants.TASK_FAILED
+            logger.error(f"Error executing musetalk script: {e}")
+
+    async def upload_result(self, task):
         """执行任务并上报结果"""
         try:
-            # 这里应该根据实际需求实现任务执行逻辑
-            task_id = task.get('id')
-            task_type = task.get('type')
-            task_data = task.get('data')
-
-            # 示例：简单的任务执行
-            result = {
-                'task_id': task_id,
-                'node_id': self.node_id,
-                'status': 'completed',
-                'result': f'Processed task {task_id} of type {task_type}',
-                'timestamp': datetime.now().isoformat()
-            }
-
+            # 准备上传文件
+            material_dir = Path(__file__).parent.parent / 'material'
+            file_path = material_dir / task.get('file_name', '')
+            
+            if not file_path.exists():
+                logger.error(f"File {file_path} not found for upload")
+                task['err_msg'] = f"File {file_path} not found for upload"
+                task['status'] = Constants.TASK_FAILED
+                return
+            
+            # 准备multipart表单数据
+            data = aiohttp.FormData()
+            data.add_field('task_id', str(task.get('task_id')))
+            data.add_field('status', 'success' if task.get('status') == Constants.TASK_COMPLETED else 'failed')
+            data.add_field('cluster_id', str(task.get('cluster_id')))
+            data.add_field('file', 
+                          open(file_path, 'rb'),
+                          filename=task.get('file_name'),
+                          content_type='application/octet-stream')
+            
             # 上报任务结果
-            async with self.session.post(f"{self.master_url}/results", json=result) as response:
+            url = self.master_task_url + 'result'
+            async with self.session.post(url, data=data) as response:
                 if response.status == 200:
-                    logger.info(f"Task {task_id} result reported successfully")
+                    resp_json = await response.json()
+                    if resp_json.get('code') != 200:
+                        logger.error(f"Failed to fetch tasks: response code {resp_json.get('code')}, message: {resp_json.get('msg')}")
+                        return
+                    logger.info(f"Task {task.get('task_id')} result and file uploaded successfully")
                 else:
-                    logger.error(f"Failed to report task {task_id} result: {response.status}")
+                    logger.error(f"Failed to report task {task.get('task_id')} result: {response.status}")
         except Exception as e:
-            logger.error(f"Error executing task {task.get('id', 'unknown')}: {e}")
+            logger.error(f"Error executing task {task.get('task_id', 'unknown')}: {e}")
+            task['err_msg'] = str(e)
+            task['status'] = Constants.TASK_FAILED
 
 
 async def main():
