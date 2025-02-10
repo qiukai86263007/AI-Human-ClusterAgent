@@ -103,7 +103,7 @@ class ClusterAgent:
                             'file_name': response.headers.get('Material-Name'),
                             'content': await response.read(),
                             'cluster_id': self.node_id,
-                            'err_msg': None,
+                            'err_msg': '',
                         }
                     if await self.download_file(task):
                         await self.execute_python_script(task)
@@ -186,6 +186,7 @@ class ClusterAgent:
             data.add_field('task_id', str(task.get('task_id')))
             data.add_field('status', 'success' if task.get('status') == Constants.TASK_COMPLETED else 'failed')
             data.add_field('cluster_id', str(task.get('cluster_id')))
+            data.add_field('err_msg', task.get('err_msg', ''))
             data.add_field('file', 
                           open(file_path, 'rb'),
                           filename=task.get('file_name'),
