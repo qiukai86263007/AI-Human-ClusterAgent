@@ -3,9 +3,13 @@ node:
   # 节点ID，用于唯一标识该节点
   id: 101
   # 主节点URL
-  master_url: http://localhost:1030
-  master_heartbeat_url: /dev-api/aihuman/cluster/heartbeat/
-  master_task_url: /dev-api/aihuman/task/anonymous/
+  master_url: http://10.0.0.5:8089
+  master_heartbeat_url: /aihuman/cluster/heartbeat/
+  master_task_url: /aihuman/task/anonymous/
+#  #dev-config
+#  master_url: http://localhost:1030
+#  master_heartbeat_url: /dev-api/aihuman/cluster/heartbeat/
+#  master_task_url: /dev-api/aihuman/task/anonymous/
 
 # 调度配置
 scheduler:
@@ -30,7 +34,10 @@ logger:
 # musetalk配置
 musetalk:
   # musetalk的根目录
-  base_dir: /opt/musetalk
-  bin: /Users/qiukai/Documents/Project/PycharmProject/ClusterAgent/agent/test.py
-  # 填写python3的路径
-  python_bin: /usr/bin/python3
+  base_dir: /root/zzz/MuseTalk
+  env_bin:  /root/miniconda3/envs/musetalk/bin/python
+#  # dev-config
+#  base_dir: /opt/musetalk
+#  bin: /Users/qiukai/Documents/Project/PycharmProject/ClusterAgent/agent/test.py
+#  # 填写python3的路径
+#  python_bin: /usr/bin/python3

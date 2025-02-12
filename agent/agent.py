@@ -1,21 +1,24 @@
+import sys
+from pathlib import Path
+
+# 将项目根目录添加到Python路径中
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import asyncio
-from datetime import datetime
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from constants import Constants
-import yaml
-from pathlib import Path
+from utils.config_manager import ConfigManager
+import os
 
 
 class ClusterAgent:
     def __init__(self, config_path=None):
-        if config_path is None:
-            config_path = Path(__file__).parent.parent / 'conf' / 'config.yaml'
-
-        # 加载配置文件
-        with open(config_path, 'r') as f:
-            self.config = yaml.safe_load(f)
+        # 使用ConfigManager加载配置文件
+        self.config = ConfigManager.load_config(config_path)
 
         # 验证配置
         if not self.config or 'node' not in self.config or 'scheduler' not in self.config:
@@ -33,7 +36,12 @@ class ClusterAgent:
         scheduler_config = self.config['scheduler']
         self.heartbeat_interval = int(scheduler_config.get('heartbeat_interval', 30))
         self.task_fetch_interval = int(scheduler_config.get('task_fetch_interval', 30))
-
+        self.musetalk_base_dir = self.config.get('musetalk', {}).get('base_dir')
+        self.musetalk_env_bin = self.config.get('musetalk', {}).get('env_bin')
+        self.musetalk_inference_cmd = self.config.get('musetalk', {}).get('inference_cmd')
+        # musetalk相关目录
+        self.musetalk_conf_dir = os.path.join(self.musetalk_base_dir, 'configs', 'inference')
+        self.musetalk_result_dir = os.path.join(self.musetalk_base_dir, 'results')
         # # 设置日志配置
         # if 'logger' in config:
         #     logger_config = config['logger']
@@ -106,6 +114,9 @@ class ClusterAgent:
                             'err_msg': '',
                         }
                     if await self.download_file(task):
+                        ConfigManager.create_task_config(
+                            self.musetalk_conf_dir,
+                            'test.yaml', 'yongen', task['file_name'])
                         await self.execute_python_script(task)
                         await self.upload_result(task)
                 elif response.status == 204:
@@ -116,19 +127,17 @@ class ClusterAgent:
             logger.error(f"Error fetching tasks: {e}")
 
     async def download_file(self, task):
-        """下载文件并保存到material目录"""
+        """下载文件并保存到musetalk audio目录"""
         try:
             file_name = task.get('file_name')
             content = task.get('content')
-            
             if not file_name or content is None:
                 task['err_msg'] = 'Invalid file download task: missing file_name or content'
                 logger.error(f"Invalid file download task: missing file_name or content")
                 return False
-
-            material_dir = Path(__file__).parent.parent / 'material'
-            material_dir.mkdir(exist_ok=True)
-            file_path = material_dir / file_name
+            audio_dir = Path(self.musetalk_base_dir) / 'data' / 'audio'
+            audio_dir.mkdir(exist_ok=True)
+            file_path = audio_dir / file_name
 
             with open(file_path, 'wb') as f:
                 f.write(content)
@@ -142,11 +151,14 @@ class ClusterAgent:
     async def execute_python_script(self, task):
         """执行配置文件中musetalk脚本"""
         try:
-            musetalk_bin = self.config.get('musetalk', {}).get('bin')
-            if musetalk_bin:
+            if self.musetalk_env_bin:
                 # Todo：python3的路径要替换成 python_bin = self.config.get('musetalk', {}).get('python_bin')
+                # 将inference_cmd拆分为独立的命令行参数
+                cmd_args = ['-m', 'scripts.inference', '--inference_config', 'configs/inference/test.yaml']
+                logger.info(f"Executing musetalk script: {self.musetalk_env_bin} {' '.join(cmd_args)}")
                 process = await asyncio.create_subprocess_exec(
-                    'python3', musetalk_bin,
+                    self.musetalk_env_bin, *cmd_args,
+                    cwd=self.musetalk_base_dir,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
@@ -154,11 +166,12 @@ class ClusterAgent:
                 logger.info(f"Output: {stdout.decode()}")
                 if process.returncode == 0:
                     task['status'] = Constants.TASK_COMPLETED
-                    logger.info(f"Successfully executed {musetalk_bin}")
+                    logger.info(f"Successfully executed musetalk script")
+                    logger.info(f"Successfully executed musetalk script, output: {stdout.decode()}")
                 else:
                     task['status'] = Constants.TASK_FAILED
                     task['err_msg'] = stderr.decode()
-                    logger.error(f"Failed to execute {musetalk_bin}: {stderr.decode()}")
+                    logger.error(f"Failed to execute musetalk script: {stderr.decode()}")
             else:
                 task['status'] = Constants.TASK_FAILED
                 task['err_msg'] = "musetalk.bin not configured in config.yaml"
@@ -172,26 +185,27 @@ class ClusterAgent:
         """执行任务并上报结果"""
         try:
             # 准备上传文件
-            material_dir = Path(__file__).parent.parent / 'material'
-            file_path = material_dir / task.get('file_name', '')
-            
+            result_dir = Path(os.path.join(self.musetalk_result_dir))
+            result_file = 'yongen_' + os.path.splitext(task.get('file_name', ''))[0] + '.mp4'
+            file_path = result_dir / result_file
+
             if not file_path.exists():
                 logger.error(f"File {file_path} not found for upload")
                 task['err_msg'] = f"File {file_path} not found for upload"
                 task['status'] = Constants.TASK_FAILED
                 return
-            
+
             # 准备multipart表单数据
             data = aiohttp.FormData()
             data.add_field('task_id', str(task.get('task_id')))
             data.add_field('status', 'success' if task.get('status') == Constants.TASK_COMPLETED else 'failed')
             data.add_field('cluster_id', str(task.get('cluster_id')))
             data.add_field('err_msg', task.get('err_msg', ''))
-            data.add_field('file', 
+            data.add_field('file',
                           open(file_path, 'rb'),
                           filename=task.get('file_name'),
                           content_type='application/octet-stream')
-            
+
             # 上报任务结果
             url = self.master_task_url + 'result'
             async with self.session.post(url, data=data) as response:
