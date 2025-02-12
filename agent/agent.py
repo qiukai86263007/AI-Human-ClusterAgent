@@ -41,7 +41,8 @@ class ClusterAgent:
         self.musetalk_inference_cmd = self.config.get('musetalk', {}).get('inference_cmd')
         # musetalk相关目录
         self.musetalk_conf_dir = os.path.join(self.musetalk_base_dir, 'configs', 'inference')
-        self.musetalk_result_dir = os.path.join(self.musetalk_base_dir, 'results')
+        self.musetalk_result_dir = Path(os.path.join(self.musetalk_base_dir, 'results'))
+        self.musetalk_audio_dir = Path(os.path.join(self.musetalk_base_dir, 'data', 'audio'))
         # # 设置日志配置
         # if 'logger' in config:
         #     logger_config = config['logger']
@@ -104,21 +105,35 @@ class ClusterAgent:
                 if response.status == 200:
                     # 检查响应头中是否包含文件下载相关信息
                     # 这是一个文件下载任务
-                    task = {
-                            'task_id': response.headers.get('Task-Id'),
-                            'name': response.headers.get('Task-Name'),
-                            'type': 'file_download',
-                            'file_name': response.headers.get('Material-Name'),
-                            'content': await response.read(),
-                            'cluster_id': self.node_id,
-                            'err_msg': '',
-                        }
-                    if await self.download_file(task):
-                        ConfigManager.create_task_config(
-                            self.musetalk_conf_dir,
-                            'test.yaml', 'yongen', task['file_name'])
-                        await self.execute_python_script(task)
-                        await self.upload_result(task)
+                    try:
+                        task = {
+                                'task_id': response.headers.get('Task-Id'),
+                                'file_name': response.headers.get('Task-Name'),
+                                'type': 'file_download',
+                                'material_id': response.headers.get('Material-ID'),
+                                'content': await response.read(),
+                                'cluster_id': self.node_id,
+                                'err_msg': '',
+                            }
+                        if await self.download_file(task):
+                            ConfigManager.create_task_config(
+                                self.musetalk_conf_dir,
+                                'test.yaml', task['material_id'], task['file_name'])
+                            await self.execute_python_script(task)
+                            await self.upload_result(task)
+                    except Exception as e:
+                        logger.error(f"Error processing file download task: {e}")
+                    finally:
+                        # 清理任务文件
+                        audio_file = self.musetalk_audio_dir / task["file_name"]
+                        if audio_file.exists():
+                            audio_file.unlink()
+                            logger.info(f"Deleted audio file {audio_file}")
+                        result_file = self.musetalk_result_dir / (
+                                    task["material_id"] + '_' + os.path.splitext(task["file_name"])[0] + '.mp4')
+                        if result_file.exists():
+                            result_file.unlink()
+                            logger.info(f"Deleted result file {result_file}")
                 elif response.status == 204:
                     logger.info(f"No tasks available")
                 else:
@@ -135,7 +150,7 @@ class ClusterAgent:
                 task['err_msg'] = 'Invalid file download task: missing file_name or content'
                 logger.error(f"Invalid file download task: missing file_name or content")
                 return False
-            audio_dir = Path(self.musetalk_base_dir) / 'data' / 'audio'
+            audio_dir = self.musetalk_audio_dir
             audio_dir.mkdir(exist_ok=True)
             file_path = audio_dir / file_name
 
@@ -152,7 +167,6 @@ class ClusterAgent:
         """执行配置文件中musetalk脚本"""
         try:
             if self.musetalk_env_bin:
-                # Todo：python3的路径要替换成 python_bin = self.config.get('musetalk', {}).get('python_bin')
                 # 将inference_cmd拆分为独立的命令行参数
                 cmd_args = ['-m', 'scripts.inference', '--inference_config', 'configs/inference/test.yaml']
                 logger.info(f"Executing musetalk script: {self.musetalk_env_bin} {' '.join(cmd_args)}")
@@ -166,7 +180,6 @@ class ClusterAgent:
                 logger.info(f"Output: {stdout.decode()}")
                 if process.returncode == 0:
                     task['status'] = Constants.TASK_COMPLETED
-                    logger.info(f"Successfully executed musetalk script")
                     logger.info(f"Successfully executed musetalk script, output: {stdout.decode()}")
                 else:
                     task['status'] = Constants.TASK_FAILED
@@ -185,8 +198,9 @@ class ClusterAgent:
         """执行任务并上报结果"""
         try:
             # 准备上传文件
-            result_dir = Path(os.path.join(self.musetalk_result_dir))
-            result_file = 'yongen_' + os.path.splitext(task.get('file_name', ''))[0] + '.mp4'
+            result_dir = self.musetalk_result_dir
+            original_result_file = os.path.splitext(task.get('file_name', ''))[0] + Constants.EXTENSION_MP4
+            result_file = task['material_id'] + '_' + original_result_file
             file_path = result_dir / result_file
 
             if not file_path.exists():
@@ -202,9 +216,9 @@ class ClusterAgent:
             data.add_field('cluster_id', str(task.get('cluster_id')))
             data.add_field('err_msg', task.get('err_msg', ''))
             data.add_field('file',
-                          open(file_path, 'rb'),
-                          filename=task.get('file_name'),
-                          content_type='application/octet-stream')
+                           open(file_path, 'rb'),
+                           filename=original_result_file,
+                           content_type='application/octet-stream')
 
             # 上报任务结果
             url = self.master_task_url + 'result'

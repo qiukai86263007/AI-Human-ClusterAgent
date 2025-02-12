@@ -19,8 +19,8 @@ class ConfigManager:
         在指定目录创建任务配置文件
         :param directory_path: 目标目录路径
         :param file_name: 配置文件名称
-        :param video_name: 视频文件名（不含扩展名）
-        :param audio_name: 音频文件名（不含扩展名）
+        :param video_name: 视频文件名(素材)
+        :param audio_name: 音频文件名
         """
         # 确保目录存在
         directory = Path(directory_path)
@@ -36,7 +36,7 @@ class ConfigManager:
         # 创建新的配置内容
         config_content = {
             'task_0': {
-                'video_path': f'data/video/yongen.mp4',
+                'video_path': f'data/video/{video_name}.mp4',
                 'audio_path': f'data/audio/{audio_name}'
             }
         }
