@@ -9,10 +9,12 @@ if project_root not in sys.path:
 import asyncio
 import aiohttp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from loguru import logger
 from constants import Constants
 from utils.config_manager import ConfigManager
 import os
+from utils.logger_manager import LogManager
+
+logger = LogManager.get_logger()
 
 
 class ClusterAgent:
@@ -44,10 +46,10 @@ class ClusterAgent:
         self.musetalk_result_dir = Path(os.path.join(self.musetalk_base_dir, 'results'))
         self.musetalk_audio_dir = Path(os.path.join(self.musetalk_base_dir, 'data', 'audio'))
         # # 设置日志配置
-        # if 'logger' in config:
-        #     logger_config = config['logger']
+        # if 'logger' in self.config:
+        #     logger_config = self.config['logger']
         #     log_path = Path(
-        #         logger_config.get('file_path', Path(__file__).parent.parent / 'logs' / 'cluster_agent.log'))
+        #         logger_config.get('file_path', Path(__file__).parent / 'logs' / 'cluster_agent.log'))
         #     log_path.parent.mkdir(parents=True, exist_ok=True)
         #
         #     # 移除默认的日志处理器

@@ -1,0 +1,16 @@
+[Unit]
+Description=Cluster Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/cluster-agent
+Environment=PYTHONPATH=/opt/cluster-agent
+ExecStart=${PYTHON_PATH} /opt/cluster-agent/agent/agent.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
