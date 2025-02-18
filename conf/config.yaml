@@ -4,8 +4,8 @@ node:
   id: 101
   # 主节点URL
   master_url: http://10.0.0.5:8089
-  master_heartbeat_url: /aihuman/cluster/heartbeat/
-  master_task_url: /aihuman/task/anonymous/
+  master_heartbeat_url: /prod-api/aihuman/cluster/heartbeat/
+  master_task_url: /prod-api/aihuman/task/anonymous/
 #  #dev-config
 #  master_url: http://localhost:1030
 #  master_heartbeat_url: /dev-api/aihuman/cluster/heartbeat/
