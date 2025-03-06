@@ -6,6 +6,9 @@ if [ "$(id -u)" != "0" ]; then
    exit 1
 fi
 
+# 安装ffmpeg
+sudo apt install ffmpeg -y
+
 # 设置安装目录
 INSTALL_DIR="/opt/cluster-agent"
 SERVICE_NAME="cluster-agent"
